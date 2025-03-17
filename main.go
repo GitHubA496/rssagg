@@ -1,24 +1,47 @@
 package main
 
 import (
-	"fmt"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/GitHubA496/rssagg/internal/database"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
-func main() {
+type apiconfig struct {
+	DB *database.Queries
+}
 
+func main() {
 	godotenv.Load(".env")
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.Fatal("PORT is not found wihtin the env")
 	}
-	fmt.Print(port)
+
+	dburl := os.Getenv("DB_URL")
+	if dburl == "" {
+		log.Fatal("DB_URL is not found wihtin the env")
+	}
+	// fmt.Println(dburl)
+	conn, err := sql.Open("postgres", dburl)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	quries := database.New(conn)
+
+	apiCfg := apiconfig{
+		DB: quries,
+	}
+
+	go startScrapping(quries, 10, time.Second*30)
 
 	router := chi.NewRouter()
 
@@ -34,6 +57,16 @@ func main() {
 	v1router.Get("/healthz", handlerReadiness)
 	v1router.Get("/err", handlerError)
 
+	v1router.Post("/user", apiCfg.handleCreateUser)
+	v1router.Get("/user", apiCfg.middlewareAuth(apiCfg.handleGetUser))
+	v1router.Get("/posts", apiCfg.middlewareAuth(apiCfg.handleGetPosts))
+	v1router.Get("/feed", apiCfg.handlerGetFeed)
+	v1router.Post("/feed", apiCfg.middlewareAuth(apiCfg.handleCreateFeed))
+
+	v1router.Post("/feed/follow", apiCfg.middlewareAuth(apiCfg.handleCreateFeedFollowers))
+	v1router.Get("/feed/follow", apiCfg.middlewareAuth(apiCfg.handleGetFeedFollowers))
+	v1router.Delete("/feed/follow/{feedFollowID}", apiCfg.middlewareAuth(apiCfg.handleDeleteFeedFollowers))
+
 	router.Mount("/v1", v1router)
 
 	srv := &http.Server{
@@ -41,8 +74,8 @@ func main() {
 		Addr:    ":" + port,
 	}
 	log.Printf("Server starting on the port %v", port)
-	err := srv.ListenAndServe()
-	if err != nil {
+	error := srv.ListenAndServe()
+	if error != nil {
 		log.Fatal(err)
 	}
 
